@@ -2,10 +2,13 @@
 import ctypes
 import logging
 import os
-import re
 import shutil
 import subprocess
 import urllib.parse
+
+#for plasma
+import dbus
+import argparse
 
 from .settings import CACHE_DIR, HOME, OS
 from . import util
@@ -40,21 +43,10 @@ def get_desktop_env():
     return None
 
 
-def xfconf(img):
+def xfconf(path, img):
     """Call xfconf to set the wallpaper on XFCE."""
-    xfconf_re = re.compile(
-        r"^/backdrop/screen\d/monitor(?:0|\w*)/"
-        r"(?:(?:image-path|last-image)|workspace\d/last-image)$",
-        flags=re.M
-    )
-    xfconf_data = subprocess.check_output(
-        ["xfconf-query", "--channel", "xfce4-desktop", "--list"],
-        stderr=subprocess.DEVNULL
-    ).decode('utf8')
-    paths = xfconf_re.findall(xfconf_data)
-    for path in paths:
-        util.disown(["xfconf-query", "--channel", "xfce4-desktop",
-                     "--property", path, "--set", img])
+    util.disown(["xfconf-query", "--channel", "xfce4-desktop",
+                 "--property", path, "--set", img])
 
 
 def set_wm_wallpaper(img):
@@ -85,9 +77,10 @@ def set_wm_wallpaper(img):
 def set_desktop_wallpaper(desktop, img):
     """Set the wallpaper for the desktop environment."""
     desktop = str(desktop).lower()
-
     if "xfce" in desktop or "xubuntu" in desktop:
-        xfconf(img)
+        # XFCE requires two commands since they differ between versions.
+        xfconf("/backdrop/screen0/monitor0/image-path", img)
+        xfconf("/backdrop/screen0/monitor0/workspace0/last-image", img)
 
     elif "muffin" in desktop or "cinnamon" in desktop:
         util.disown(["gsettings", "set",
@@ -107,9 +100,10 @@ def set_desktop_wallpaper(desktop, img):
         util.disown(["swaymsg", "output", "*", "bg", img, "fill"])
 
     elif "awesome" in desktop:
-        util.disown(["awesome-client",
-                     "require('gears').wallpaper.maximized('{img}')"
-                     .format(**locals())])
+        util.disown(["awesome-client", "gears.wallpaper.maximized(", img, ")"])
+        
+    elif "kde" in desktop:
+        set_kde_wallpaper(img)
 
     else:
         set_wm_wallpaper(img)
@@ -119,18 +113,7 @@ def set_mac_wallpaper(img):
     """Set the wallpaper on macOS."""
     db_file = "Library/Application Support/Dock/desktoppicture.db"
     db_path = os.path.join(HOME, db_file)
-    img_dir, _ = os.path.split(img)
-
-    # Clear the existing picture data and write the image paths
-    sql = "delete from data; "
-    sql += "insert into data values(\"%s\"); " % img_dir
-    sql += "insert into data values(\"%s\"); " % img
-
-    # Set all monitors/workspaces to the selected image
-    sql += "update preferences set data_id=2 where key=1 or key=2 or key=3; "
-    sql += "update preferences set data_id=1 where key=10 or key=20 or key=30;"
-
-    subprocess.call(["sqlite3", db_path, sql])
+    subprocess.call(["sqlite3", db_path, "update data set value = '%s'" % img])
 
     # Kill the dock to fix issues with cached wallpapers.
     # macOS caches wallpapers and if a wallpaper is set that shares
@@ -148,6 +131,25 @@ def set_win_wallpaper(img):
         ctypes.windll.user32.SystemParametersInfoW(20, 0, img, 3)
     else:
         ctypes.windll.user32.SystemParametersInfoA(20, 0, img, 3)
+
+def set_kde_wallpaper(img):
+    """Set the wallpaper on KDE Plasma"""
+    # For whatever reason, it's not as simple as one would think.
+    # Shoutouts to pashazz on GitHub, the author of this snippet
+    # Taken from https://github.com/pashazz/ksetwallpaper
+    jscript = """
+    var allDesktops = desktops();
+    print (allDesktops);
+    for (i=0;i<allDesktops.length;i++) {
+        d = allDesktops[i];
+        d.wallpaperPlugin = "%s";
+        d.currentConfigGroup = Array("Wallpaper", "%s", "General");
+        d.writeConfig("Image", "file://%s")
+    }
+    """
+    bus = dbus.SessionBus()
+    plasma = dbus.Interface(bus.get_object('org.kde.plasmashell', '/PlasmaShell'), dbus_interface='org.kde.PlasmaShell')
+    plasma.evaluateScript(jscript % ('org.kde.image', 'org.kde.image', img))
 
 
 def change(img):
