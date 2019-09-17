@@ -11,4 +11,4 @@ Install the same way you'd normally install Pywal.
 ### *0.0.1 (09/16/19)*
 ----------------------
 - Forked from (https://github.com/dylanaraps/pywal)
-- Tweaked ''wallpaper.py'' to add wallpaper-changing functionality on Plasma
+- Tweaked ``wallpaper.py`` to add wallpaper-changing functionality on Plasma
